@@ -185,6 +185,108 @@ platform's. It costs two reads (candidate slots, then those slots' full offer
 sets) because a winner can only be judged against its rivals. Prefer it
 whenever the answer is shown to a subscriber.
 
+## Mirroring the catalog into your own project
+
+`loadCatalogSnapshot()` / `watchCatalog()` read RepairPricer's project
+directly, which means every end-user client needs a RepairPricer session.
+If your product has its own Appwrite project and many end users, the
+better shape is a **mirror**: one scheduled Function in *your* project
+copies the snapshot blob into *your* bucket, and your users read it with
+the credentials and realtime connection they already have. One upstream
+fetch per edition for your whole deployment, no second websocket in the
+browser, no RepairPricer sessions for end users at all.
+
+Create a bucket once (here `repairpricer_mirror`) with `fileSecurity:
+false` and read for `Role.users()` — the catalog is deliberately
+tenant-agnostic, identical for every reader, so a broad read grant on the
+*mirror* leaks nothing. Then a scheduled Dart Function (`dart_appwrite`,
+e.g. every 15 minutes):
+
+```dart
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:dart_appwrite/dart_appwrite.dart';
+import 'package:dart_appwrite/enums.dart' as enums;
+
+Future<dynamic> main(final context) async {
+  final env = Platform.environment;
+
+  // 1. Trade your rp_live_… API token for a read session at the broker.
+  //    The token stays server-side; it never reaches a browser.
+  final rp = Client()
+      .setEndpoint('https://appwrite.heid.se/v1')
+      .setProject('6a57c373003e0ba11db4');
+  final exec = await Functions(rp).createExecution(
+    functionId: 'subscriber_session',
+    body: jsonEncode({'token': env['REPAIRPRICER_API_TOKEN']}),
+    xasync: false,
+    path: '/',
+    method: enums.ExecutionMethod.pOST,
+    headers: {'content-type': 'application/json'},
+  );
+  final broker = jsonDecode(exec.responseBody) as Map<String, dynamic>;
+  if (broker['ok'] != true) throw StateError('broker: ${broker['error']}');
+  rp.setSession(broker['secret'] as String);
+
+  // 2. Pull the published snapshot blob.
+  final bytes = await Storage(rp)
+      .getFileDownload(bucketId: 'snapshots', fileId: 'catalog_snapshot');
+  String edition(List<int> gz) =>
+      '${(jsonDecode(utf8.decode(gzip.decode(gz))) as Map)['generated_at']}';
+
+  // 3. Republish in YOUR project — only when the edition actually
+  //    changed, so browsers' realtime doorbells only ring for real news.
+  final own = Storage(Client()
+      .setEndpoint(env['APPWRITE_FUNCTION_API_ENDPOINT']!)
+      .setProject(env['APPWRITE_FUNCTION_PROJECT_ID']!)
+      .setKey(context.req.headers['x-appwrite-key']));
+  try {
+    final current = await own.getFileDownload(
+        bucketId: 'repairpricer_mirror', fileId: 'catalog_snapshot');
+    if (edition(current) == edition(bytes)) {
+      return context.res.json({'ok': true, 'changed': false});
+    }
+    await own.deleteFile(
+        bucketId: 'repairpricer_mirror', fileId: 'catalog_snapshot');
+  } on AppwriteException catch (e) {
+    if (e.code != 404) rethrow; // first run — nothing mirrored yet
+  }
+  await own.createFile(
+    bucketId: 'repairpricer_mirror',
+    fileId: 'catalog_snapshot',
+    file: InputFile.fromBytes(
+        bytes: bytes, filename: 'catalog_snapshot.json.gz'),
+  );
+  return context.res.json({'ok': true, 'changed': true});
+}
+```
+
+(Function scopes: `buckets.read`, `buckets.write`, `files.read`,
+`files.write`. One variable: `REPAIRPRICER_API_TOKEN`.)
+
+Your clients then bootstrap from the mirror and treat its bucket event as
+the wake-up — same file format, so `CatalogSnapshot.fromBytes` parses it
+as-is:
+
+```dart
+final bytes = await Storage(ownClient).getFileDownload(
+    bucketId: 'repairpricer_mirror', fileId: 'catalog_snapshot');
+final snapshot = CatalogSnapshot.fromBytes(bytes);
+
+Realtime(ownClient).subscribe(['buckets.repairpricer_mirror.files'])
+  ..stream.listen((m) {
+    if (m.events.any((e) => e.endsWith('.create'))) {
+      // re-fetch and swap the in-memory snapshot
+    }
+  });
+```
+
+Skip the mirror and use `watchCatalog()` directly when your app is a
+single-operator tool (the operator *is* the subscriber session) or you
+have no Appwrite project of your own. This mirror pattern is what RepairX
+runs in production.
+
 ## Money & currency
 
 All money is **minor units** (öre/cents). Offers are stored in the currency
