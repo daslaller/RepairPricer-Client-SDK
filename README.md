@@ -21,8 +21,11 @@ dependencies:
     git:
       url: https://github.com/daslaller/RepairPricer-Client-SDK
       path: packages/repairpricer
-      ref: main
+      ref: v0.1.0
 ```
+
+Pin a release tag rather than `main` — a branch ref floats, so an upstream
+push would silently change what your build resolves to.
 
 Then see [the SDK README](packages/repairpricer/README.md) for a usage
 example.

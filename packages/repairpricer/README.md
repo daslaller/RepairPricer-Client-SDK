@@ -43,8 +43,13 @@ dependencies:
     git:
       url: https://github.com/daslaller/RepairPricer-Client-SDK
       path: packages/repairpricer
-      ref: main   # or pin a commit SHA for a reproducible build
+      ref: v0.1.0
 ```
+
+Pin a release tag, as above — `ref: main` floats, so an upstream push would
+change what your build resolves to without you touching anything. Bump the
+tag deliberately, then `flutter pub upgrade repairpricer` and commit your
+lockfile.
 
 `Client`, `Account`, and `Query` are re-exported from this package, so this
 one import is all you need.
