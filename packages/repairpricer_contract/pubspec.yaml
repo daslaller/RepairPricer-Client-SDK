@@ -1,0 +1,18 @@
+name: repairpricer_contract
+description: >
+  The pure-Dart RepairPricer client contract: per-subscriber pricing
+  configuration, the read-time margin/tax/rounding pipeline, winner
+  selection, the catalog-snapshot codec, and the verification badge
+  vocabulary. Shared verbatim by the RepairPricer Flutter SDK and the
+  RepairPricer server engine. No Appwrite, no Flutter, no dart:io.
+version: 0.1.0
+repository: https://github.com/daslaller/RepairPricer-Client-SDK
+issue_tracker: https://github.com/daslaller/RepairPricer-Client-SDK/issues
+publish_to: 'none'
+
+environment:
+  sdk: '>=3.3.0 <4.0.0'
+
+dev_dependencies:
+  lints: ^4.0.0
+  test: ^1.25.0
