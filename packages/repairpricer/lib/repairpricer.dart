@@ -21,6 +21,7 @@ export 'package:appwrite/appwrite.dart';
 export 'package:repairpricer_contract/repairpricer_contract.dart';
 
 export 'src/catalog_tree.dart';
+export 'src/offer_query.dart';
 export 'src/client.dart';
 export 'src/snapshot.dart';
 export 'src/translations.dart';

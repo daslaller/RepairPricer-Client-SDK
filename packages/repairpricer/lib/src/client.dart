@@ -6,6 +6,7 @@ import 'package:appwrite/enums.dart';
 import 'package:repairpricer_contract/repairpricer_contract.dart';
 
 import 'catalog_tree.dart';
+import 'offer_query.dart';
 import 'snapshot.dart';
 import 'translations.dart';
 import 'views.dart';
@@ -578,6 +579,156 @@ class RepairPricerClient {
         Query.equal('device_type_name', deviceTypeName),
     ]);
     return [for (final row in rows) RepairPricerDevice.fromRow(row)];
+  }
+
+  // ── Suppliers ─────────────────────────────────────────────────────────
+
+  /// Every active supplier that can appear on an offer.
+  ///
+  /// This is what a "which suppliers do we buy from?" settings screen is
+  /// built on — you cannot offer someone a list of suppliers to exclude
+  /// without first knowing the list. Inactive suppliers are omitted, so this
+  /// matches what the catalog's `supplier_name` values already reveal.
+  ///
+  /// ```dart
+  /// for (final s in await rp.listSuppliers()) {
+  ///   // s.name is what excludeSuppliers / FilterKind.supplier match on
+  /// }
+  /// ```
+  Future<List<SupplierInfo>> listSuppliers({bool includeInactive = false}) async {
+    final rows = await _listAllRows('suppliers', [
+      if (!includeInactive) Query.equal('is_active', true),
+    ]);
+    final suppliers = [for (final row in rows) SupplierInfo.fromRow(row)];
+    suppliers.sort((a, b) => a.name.toLowerCase().compareTo(b.name.toLowerCase()));
+    return suppliers;
+  }
+
+  /// Supplier names this subscriber has *not* excluded — i.e. what they
+  /// actually buy from. Handy for showing "buying from 4 of 6 suppliers"
+  /// without the caller re-deriving the set difference.
+  Future<List<SupplierInfo>> listIncludedSuppliers(ClientConfigBundle? config) async {
+    final excluded = config?.excludedValues(FilterKind.supplier).toSet() ?? const <String>{};
+    final all = await listSuppliers();
+    return [for (final s in all) if (!excluded.contains(s.name)) s];
+  }
+
+  // ── Offers across the catalog ─────────────────────────────────────────
+
+  /// Offers matching [query], across every slot rather than one at a time.
+  ///
+  /// The subscriber's saved supplier exclusions apply on top of [query]
+  /// unless it sets `respectSavedExclusions: false` — see [OfferQuery].
+  ///
+  /// Reads every match (cursor-paged), so narrow the query when you can.
+  /// An unfiltered call returns the entire offer set.
+  Future<List<OfferView>> listOffers(
+    OfferQuery query, {
+    ClientConfigBundle? config,
+  }) async {
+    final queries = query.toQueries(config);
+    // Filters cancel out (every requested supplier is also excluded) — the
+    // answer is knowably empty, so don't spend a round-trip proving it.
+    if (queries == null) return const [];
+    final rows = await _scanRows('offer_projection', queries);
+    return [for (final row in rows) OfferView.fromRow(row)];
+  }
+
+  /// Every offer from [suppliers]. Shorthand for the common
+  /// [listOffers] case.
+  ///
+  /// ```dart
+  /// final fromSpares = await rp.offersFrom({'spares'}, config: config);
+  /// ```
+  Future<List<OfferView>> offersFrom(
+    Set<String> suppliers, {
+    ClientConfigBundle? config,
+    bool inStockOnly = false,
+  }) {
+    return listOffers(
+      OfferQuery(suppliers: suppliers, inStockOnly: inStockOnly),
+      config: config,
+    );
+  }
+
+  /// Slots where one of [suppliers] wins, with that winning offer.
+  ///
+  /// Unlike `OfferQuery(winnersOnly: true)` — which trusts the platform's
+  /// cached `is_winner` flag — this re-runs selection under the
+  /// subscriber's own [WinnerStrategy], because a team on `mostExpensive`
+  /// has a different winner than the platform's cached one. It therefore
+  /// reads the full offer set for the candidate slots and decides
+  /// client-side, which is the only way to get an answer that matches what
+  /// [winnerForSlot] would say for each slot individually.
+  ///
+  /// Returns `{slotCode: winningOffer}`, only for slots won by [suppliers].
+  Future<Map<String, OfferView>> winnersFrom(
+    Set<String> suppliers, {
+    ClientConfigBundle? config,
+    WinnerStrategy? strategy,
+  }) async {
+    // Slots where these suppliers appear at all — the only slots they could
+    // possibly win. Everything else needs no consideration.
+    final candidates = await listOffers(
+      OfferQuery(suppliers: suppliers),
+      config: config,
+    );
+    if (candidates.isEmpty) return const {};
+
+    final codes = {for (final o in candidates) o.code};
+    // Now the FULL offer set for those slots — a winner can only be judged
+    // against its rivals, so filtering to `suppliers` here would hand every
+    // slot to them by default.
+    final all = await listOffers(OfferQuery(slotCodes: codes), config: config);
+
+    final bySlot = <String, List<OfferView>>{};
+    for (final offer in all) {
+      (bySlot[offer.code] ??= []).add(offer);
+    }
+
+    final resolved = strategy ?? config?.strategy ?? WinnerStrategy.cheapest;
+    final winners = <String, OfferView>{};
+    for (final entry in bySlot.entries) {
+      final offers = entry.value;
+      final byId = {for (final o in offers) o.offerId: o};
+      final winner = selectWinner(
+        [
+          for (final o in offers)
+            WinnerCandidate(
+              offerId: o.offerId,
+              stockPriceMinor: o.costPriceMinor,
+              inStock: o.inStock,
+            ),
+        ],
+        resolved,
+      );
+      if (winner == null) continue;
+      final view = byId[winner.offerId];
+      if (view != null && suppliers.contains(view.supplierName)) {
+        winners[entry.key] = view;
+      }
+    }
+    return winners;
+  }
+
+  // ── Saved supplier exclusions ─────────────────────────────────────────
+
+  /// Excludes [suppliers] for this team, persistently — the region-locked
+  /// distributor case. Applies to every subsequent read that is passed a
+  /// [ClientConfigBundle], including [listCatalog] and [winnerForSlot].
+  ///
+  /// Reload the config afterwards ([loadClientConfig]) to see it reflected.
+  Future<void> excludeSuppliers(Set<String> suppliers) async {
+    for (final name in suppliers) {
+      await addFilterRule(FilterKind.supplier, name);
+    }
+  }
+
+  /// Undoes [excludeSuppliers].
+  Future<void> includeSuppliers(Set<String> suppliers) async {
+    for (final name in suppliers) {
+      await removeFilterRule(FilterKind.supplier, name);
+    }
   }
 
   // ── Translations ──────────────────────────────────────────────────────

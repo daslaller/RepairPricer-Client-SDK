@@ -3,7 +3,7 @@ description: >
   RepairPricer subscriber SDK — authenticate with a Team-member session and
   read the shared catalog, offers, prices, and per-team configuration from
   the RepairPricer Appwrite project. One dependency, Flutter-web friendly.
-version: 0.1.0
+version: 0.2.0
 repository: https://github.com/daslaller/RepairPricer-Client-SDK
 issue_tracker: https://github.com/daslaller/RepairPricer-Client-SDK/issues
 # Distributed as a public git dependency, not via pub.dev. See README.
