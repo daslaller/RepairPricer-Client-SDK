@@ -30,11 +30,41 @@ class CatalogSnapshot {
     required this.generatedAt,
     required this.devices,
     required this.slots,
+    this.shopCurrency = '',
+    this.rates = const {},
   });
 
   final DateTime generatedAt;
   final List<RepairPricerDevice> devices;
   final List<CatalogSlotView> slots;
+
+  /// The platform's currency, and FX rates into it (`EUR -> 11.3` = €1 is
+  /// 11.3 SEK when the shop currency is SEK).
+  ///
+  /// The catalog is genuinely mixed-currency — a row's prices are in
+  /// whatever currency its winning supplier was fetched in — so these are
+  /// how you get a whole catalog into one currency. Empty on editions
+  /// published before rates existed; use [convert] rather than reading the
+  /// map directly, so a missing rate stays visible instead of defaulting.
+  final String shopCurrency;
+  final Map<String, double> rates;
+
+  /// Converts a minor-unit amount between currencies using this edition's
+  /// rates. **Null when the rate is unknown** — deliberately not 1.0, which
+  /// would silently present a EUR price as SEK.
+  ///
+  /// ```dart
+  /// final slot = snapshot.slots.first;
+  /// final inShop = snapshot.convert(slot.winningPriceMinor,
+  ///     from: slot.currency, to: 'SEK');
+  /// ```
+  int? convert(int amountMinor, {required String from, required String to}) =>
+      convertMinor(amountMinor,
+          from: from, to: to, rates: rates, shopCurrency: shopCurrency);
+
+  /// The multiplier from 1 unit of [from] to [to], or null when unknown.
+  double? rateFor({required String from, required String to}) =>
+      rateBetween(from: from, to: to, rates: rates, shopCurrency: shopCurrency);
 
   /// Parses the raw bucket file (gzipped JSON, written by the engine's
   /// `CatalogSnapshotWriter`). Throws [FormatException] on garbage or on a
@@ -50,6 +80,8 @@ class CatalogSnapshot {
       generatedAt: data.generatedAt,
       devices: [for (final row in data.devices) RepairPricerDevice.fromRow(row)],
       slots: [for (final row in data.slots) CatalogSlotView.fromRow(row)],
+      shopCurrency: data.shopCurrency,
+      rates: data.rates,
     );
   }
 }

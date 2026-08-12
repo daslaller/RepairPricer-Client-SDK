@@ -61,12 +61,76 @@ class CatalogSnapshotData {
     required this.generatedAt,
     required this.devices,
     required this.slots,
+    this.shopCurrency = '',
+    this.rates = const {},
   });
 
   final int version;
   final DateTime generatedAt;
   final List<Map<String, dynamic>> devices;
   final List<Map<String, dynamic>> slots;
+
+  /// The platform's own currency — what [rates] convert *into*.
+  /// Empty on editions published before rates existed.
+  final String shopCurrency;
+
+  /// FX rates, `CURRENCY -> units of [shopCurrency] per 1 unit of it`.
+  /// e.g. `{'EUR': 11.3}` means €1 = 11.3 SEK when shopCurrency is SEK.
+  ///
+  /// Why the catalog needs these at all: a row's prices are stored in
+  /// whatever currency its winning supplier was fetched in and are never
+  /// normalised, so the catalog is genuinely mixed-currency. Publishing the
+  /// rates alongside is what lets each subscriber convert into *their* shop
+  /// currency — a single normalisation upstream could only ever serve one.
+  ///
+  /// Empty on editions published before rates existed, and possibly missing
+  /// a currency the platform has no rate for. Treat a missing entry as
+  /// "cannot convert", never as 1.0 — see [rateBetween].
+  final Map<String, double> rates;
+}
+
+/// Converts [amountMinor] from [from] into [to] using [rates] expressed in
+/// [shopCurrency]. Returns null when either leg has no rate — the caller
+/// must decide what to show rather than being handed a silently wrong
+/// number, which is why this is nullable and not `?? 1.0`.
+int? convertMinor(
+  int amountMinor, {
+  required String from,
+  required String to,
+  required Map<String, double> rates,
+  required String shopCurrency,
+}) {
+  final f = from.trim().toUpperCase();
+  final t = to.trim().toUpperCase();
+  if (f.isEmpty || t.isEmpty) return null;
+  if (f == t) return amountMinor;
+  final rate = rateBetween(from: f, to: t, rates: rates, shopCurrency: shopCurrency);
+  return rate == null ? null : (amountMinor * rate).round();
+}
+
+/// The multiplier taking 1 unit of [from] to [to]. Null when unknown.
+///
+/// Rates are stored against the shop currency, so a cross pair (EUR->USD
+/// with a SEK shop) routes through it: EUR->SEK->USD.
+double? rateBetween({
+  required String from,
+  required String to,
+  required Map<String, double> rates,
+  required String shopCurrency,
+}) {
+  final f = from.trim().toUpperCase();
+  final t = to.trim().toUpperCase();
+  final shop = shopCurrency.trim().toUpperCase();
+  if (f.isEmpty || t.isEmpty) return null;
+  if (f == t) return 1.0;
+
+  // A currency's rate against itself is 1 even when absent from the map.
+  double? toShop(String c) => c == shop ? 1.0 : rates[c];
+
+  final fromRate = toShop(f);
+  final toRate = toShop(t);
+  if (fromRate == null || toRate == null || toRate == 0) return null;
+  return fromRate / toRate;
 }
 
 /// Builds the snapshot document from raw projection rows. Only the
@@ -76,6 +140,8 @@ Map<String, dynamic> encodeCatalogSnapshot({
   required DateTime generatedAt,
   required Iterable<Map<String, dynamic>> devices,
   required Iterable<Map<String, dynamic>> slots,
+  String shopCurrency = '',
+  Map<String, double> rates = const {},
 }) {
   List<Map<String, dynamic>> strip(
           Iterable<Map<String, dynamic>> rows, List<String> columns) =>
@@ -91,6 +157,14 @@ Map<String, dynamic> encodeCatalogSnapshot({
     'generated_at': generatedAt.toUtc().toIso8601String(),
     'devices': strip(devices, snapshotDeviceColumns),
     'slots': strip(slots, snapshotSlotColumns),
+    // Additive: readers that predate these ignore unknown keys, so no
+    // version bump and no coordinated deploy. Omitted entirely when empty
+    // rather than written as {} so an edition without rates is obvious.
+    if (shopCurrency.isNotEmpty) 'shop_currency': shopCurrency.toUpperCase(),
+    if (rates.isNotEmpty)
+      'rates': {
+        for (final e in rates.entries) e.key.toUpperCase(): e.value,
+      },
   };
 }
 
@@ -120,10 +194,27 @@ CatalogSnapshotData decodeCatalogSnapshot(Map<String, dynamic> json) {
     ];
   }
 
+  // Rates are optional and additive: an edition published before they
+  // existed simply has none, and a malformed entry is skipped rather than
+  // failing the whole snapshot — a bad FX row must not cost a subscriber
+  // their entire catalog.
+  final rawRates = json['rates'];
+  final rates = <String, double>{};
+  if (rawRates is Map) {
+    for (final e in rawRates.entries) {
+      final v = e.value;
+      final d = v is num ? v.toDouble() : double.tryParse('$v');
+      if (d == null || d <= 0) continue;
+      rates['${e.key}'.toUpperCase()] = d;
+    }
+  }
+
   return CatalogSnapshotData(
     version: version,
     generatedAt: generatedAt.toUtc(),
     devices: rows('devices'),
     slots: rows('slots'),
+    shopCurrency: '${json['shop_currency'] ?? ''}'.toUpperCase(),
+    rates: rates,
   );
 }
