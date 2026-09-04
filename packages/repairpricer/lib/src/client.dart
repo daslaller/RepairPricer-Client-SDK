@@ -75,7 +75,16 @@ class RepairPricerClient {
   /// config row itself; pass [teamId] only when the user belongs to several
   /// subscriber teams. Returns null when the team has no config row yet —
   /// callers then behave exactly as before this layer existed.
-  Future<ClientConfigBundle?> loadClientConfig({String? teamId}) async {
+  /// [withRates] attaches the FX pair the published snapshot carries, so the
+  /// returned bundle can restate prices into
+  /// [SubscriberConfig.displayCurrency]. Costs one snapshot fetch (cached for
+  /// 15 minutes), and degrades to a bundle that simply does not convert when
+  /// no snapshot is available — the same behaviour as omitting it.
+  ///
+  /// Rows are stored in the winning supplier's currency, so a bundle without
+  /// rates can only relabel prices, not convert them. Prefer passing true
+  /// unless the catalog is known to be single-currency.
+  Future<ClientConfigBundle?> loadClientConfig({String? teamId, bool withRates = false}) async {
     final configPage = await _db.listRows(
       databaseId: databaseId,
       tableId: 'subscriber_config',
@@ -92,11 +101,15 @@ class RepairPricerClient {
       _listAllRows('subscriber_filter_rules', [Query.equal('team_id', config.teamId)]),
       _listAllRows('subscriber_tier_names', [Query.equal('team_id', config.teamId)]),
     ]);
-    return ClientConfigBundle(
+    final bundle = ClientConfigBundle(
       config: config,
       filterRules: [for (final row in rules) FilterRule.fromRow(row)],
       tierNames: [for (final row in tierNames) TierNameOverride.fromRow(row)],
     );
+    if (!withRates) return bundle;
+    final snapshot = await loadCatalogSnapshot();
+    if (snapshot == null || snapshot.shopCurrency.isEmpty) return bundle;
+    return bundle.withRates(shopCurrency: snapshot.shopCurrency, rates: snapshot.rates);
   }
 
   // ── Catalog snapshot ──────────────────────────────────────────────────
@@ -551,14 +564,40 @@ class RepairPricerClient {
   /// in `platform` mode the precomputed [CatalogSlotView.winningPriceMinor];
   /// in `custom` mode their own margin pipeline over the config-strategy
   /// winner's cost. Null when the slot is unknown or has no offers.
+  ///
+  /// The result is stated in [SubscriberConfig.displayCurrency] whenever
+  /// [config] carries rates (see [ClientConfigBundle.withRates]) — rows are
+  /// stored in the winning supplier's currency, so without them this can only
+  /// return the row's own figure. **Null also means "no rate to convert
+  /// with"**, which is why it is null rather than a number that would be
+  /// wrong by an exchange rate; use [getCatalogSlot] plus
+  /// [CatalogSlotView.applyClientConfig] when you need to tell the two apart
+  /// ([CatalogSlotView.displayPriceUnavailable] distinguishes them).
   Future<int?> displayPriceForSlot(String code, ClientConfigBundle config) async {
     if (config.config.pricingMode == PricingMode.platform) {
-      return (await getCatalogSlot(code))?.winningPriceMinor;
+      final slot = await getCatalogSlot(code);
+      if (slot == null) return null;
+      final applied = slot.applyClientConfig(config, locale: config.config.widgetLocale);
+      if (applied.displayPriceUnavailable) return null;
+      return applied.displayPriceMinor ?? applied.winningPriceMinor;
     }
     final winner = await winnerForSlot(code, null, config);
     if (winner == null) return null;
+    // The winner's cost is in ITS supplier's currency; the subscriber's
+    // rounding step and fixed margin are in theirs. Convert first, or "round
+    // to the nearest 5" rounds to five of the wrong unit.
+    final costMinor = config.canConvert
+        ? convertMinor(
+            winner.costPriceMinor,
+            from: winner.currency,
+            to: config.config.displayCurrency,
+            rates: config.rates,
+            shopCurrency: config.shopCurrency,
+          )
+        : winner.costPriceMinor;
+    if (costMinor == null) return null;
     return computeOfferPricing(
-      rawPriceMinor: winner.costPriceMinor,
+      rawPriceMinor: costMinor,
       config: config.config.toPricingConfig(),
       rateToShop: 1.0,
     ).finalPriceMinor;

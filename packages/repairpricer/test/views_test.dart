@@ -50,6 +50,143 @@ void main() {
       expect(view.displayPriceMinor, isNull); // use winningPriceMinor
     });
 
+    // The catalog is mixed-currency: rows carry the WINNING SUPPLIER's
+    // currency. Before this, applying a config relabelled a EUR row as SEK
+    // and left the number alone — ~11x too cheap.
+    group('currency conversion', () {
+      // €1 = 11.5 SEK, $1 = 10.5 SEK.
+      const shop = 'SEK';
+      const rates = {'EUR': 11.5, 'USD': 10.5};
+
+      CatalogSlotView eurSlot() => CatalogSlotView.fromRow(const {
+            'code': 'rp-eur',
+            'model_name': 'iPhone 13',
+            'tier_name': 'OEM',
+            'tier_key': 'oem',
+            'cost_price': 10000, // €100.00
+            'winning_price': 12000, // €120.00
+            'final_price_to_customer': 20000,
+            'suggested_service_fee': 8000,
+            'currency': 'EUR',
+            'in_stock': true,
+          });
+
+      ClientConfigBundle sekBundle({PricingMode mode = PricingMode.platform}) {
+        final base = SubscriberConfig.defaults(teamId: 't1');
+        return ClientConfigBundle(
+          config: SubscriberConfig(
+            teamId: base.teamId,
+            pricingMode: mode,
+            strategy: base.strategy,
+            marginType: MarginType.percentage,
+            marginValueMinor: 2000, // 20%
+            marginMinMinor: 0,
+            marginMaxMinor: 0,
+            taxRatePercent: 0,
+            roundingEnabled: false,
+            roundingMethod: base.roundingMethod,
+            roundingStepMajor: base.roundingStepMajor,
+            displayCurrency: shop,
+          ),
+        ).withRates(shopCurrency: shop, rates: rates);
+      }
+
+      test('a bundle with no rates does not convert — unchanged behaviour', () {
+        final plain = ClientConfigBundle(config: SubscriberConfig.defaults(teamId: 't1'));
+        expect(plain.canConvert, isFalse);
+        final view = eurSlot().applyClientConfig(plain, locale: 'sv');
+        expect(view.currency, 'EUR', reason: 'no rates: nothing is restated');
+        expect(view.winningPriceMinor, 12000);
+        expect(view.displayPriceMinor, isNull);
+        expect(view.displayPriceUnavailable, isFalse);
+      });
+
+      test('platform mode restates every money field and the label together', () {
+        final view = eurSlot().applyClientConfig(sekBundle(), locale: 'sv');
+        expect(view.currency, 'SEK');
+        expect(view.costPriceMinor, (10000 * 11.5).round());
+        expect(view.winningPriceMinor, (12000 * 11.5).round());
+        expect(view.finalPriceToCustomerMinor, (20000 * 11.5).round());
+        expect(view.suggestedServiceFeeMinor, (8000 * 11.5).round());
+        expect(view.displayPriceMinor, (12000 * 11.5).round());
+        expect(view.displayCurrency, 'SEK');
+        expect(view.displayPriceUnavailable, isFalse);
+      });
+
+      test('custom mode converts BEFORE the margin pipeline', () {
+        final view = eurSlot().applyClientConfig(
+          sekBundle(mode: PricingMode.custom),
+          locale: 'sv',
+        );
+        // €100 -> 1150 SEK, then +20% = 1380 SEK. Applying the margin first
+        // and converting after would round in the wrong currency.
+        expect(view.displayPriceMinor, 138000);
+        expect(view.currency, 'SEK');
+      });
+
+      test('a missing rate flags unavailable rather than showing the raw number', () {
+        final gbpSlot = CatalogSlotView.fromRow(const {
+          'code': 'rp-gbp',
+          'model_name': 'iPhone 13',
+          'tier_name': 'OEM',
+          'cost_price': 10000,
+          'winning_price': 12000,
+          'currency': 'GBP', // no rate
+          'in_stock': true,
+        });
+        final view = gbpSlot.applyClientConfig(sekBundle(), locale: 'sv');
+        expect(view.displayPriceUnavailable, isTrue);
+        expect(view.displayPriceMinor, isNull);
+        expect(view.currency, 'GBP', reason: 'left honest, not relabelled');
+        expect(view.displayCurrency, 'SEK');
+      });
+
+      test('a same-currency row is untouched and adds no display price', () {
+        final sekSlot = CatalogSlotView.fromRow(const {
+          'code': 'rp-sek',
+          'model_name': 'iPhone 13',
+          'tier_name': 'OEM',
+          'cost_price': 10000,
+          'winning_price': 12000,
+          'currency': 'SEK',
+          'in_stock': true,
+        });
+        final view = sekSlot.applyClientConfig(sekBundle(), locale: 'sv');
+        expect(view.winningPriceMinor, 12000);
+        expect(view.displayPriceMinor, isNull,
+            reason: 'platform mode with nothing to convert: winningPriceMinor IS the price');
+        expect(view.displayPriceUnavailable, isFalse);
+      });
+
+      test('re-applying a config does not keep a stale display price', () {
+        final once = eurSlot().applyClientConfig(sekBundle(mode: PricingMode.custom), locale: 'sv');
+        expect(once.displayPriceMinor, isNotNull);
+        // Now already in SEK, platform mode: nothing to convert, so the
+        // display price must be cleared rather than carried over.
+        final twice = once.applyClientConfig(sekBundle(), locale: 'sv');
+        expect(twice.displayPriceMinor, isNull);
+      });
+
+      group('inCurrency', () {
+        test('routes a cross pair through the shop currency', () {
+          final usd = eurSlot().inCurrency('USD', rates: rates, shopCurrency: shop);
+          // €100 -> 1150 SEK -> $109.52
+          expect(usd!.costPriceMinor, (10000 * 11.5 / 10.5).round());
+          expect(usd.currency, 'USD');
+        });
+
+        test('is null, never 1.0, when a leg has no rate', () {
+          expect(eurSlot().inCurrency('GBP', rates: rates, shopCurrency: shop), isNull);
+          expect(eurSlot().inCurrency('', rates: rates, shopCurrency: shop), isNull);
+        });
+
+        test('same currency returns the row itself', () {
+          final slot = eurSlot();
+          expect(identical(slot.inCurrency('eur', rates: rates, shopCurrency: shop), slot), isTrue);
+        });
+      });
+    });
+
     test('custom mode runs the subscriber margin pipeline over cost', () {
       final base = SubscriberConfig.defaults(teamId: 't1');
       final custom = SubscriberConfig(
