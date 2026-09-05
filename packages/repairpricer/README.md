@@ -72,7 +72,10 @@ await Account(client).createEmailPasswordSession(
 final rp = RepairPricerClient(client);
 
 // Per-team configuration (pricing mode, strategy, filters, tier renames).
-final config = await rp.loadClientConfig();
+// `withRates: true` also attaches the FX rates the snapshot publishes, so
+// prices can be restated in YOUR display currency. The catalog is genuinely
+// mixed-currency, so you almost always want this — see Money & currency.
+final config = await rp.loadClientConfig(withRates: true);
 
 // Browse the shared catalog — exclusions and tier labels applied per config.
 final catalog = await rp.listCatalog(config: config, limit: 50);
@@ -96,7 +99,7 @@ final live = rp.watchCatalogSnapshot();            // re-emits on each sync
 ## What you get
 
 **Reads**
-- `loadClientConfig()` → `ClientConfigBundle?` (config row + filter rules + tier renames)
+- `loadClientConfig({withRates})` → `ClientConfigBundle?` (config row + filter rules + tier renames, optionally FX rates)
 - `loadCatalogSnapshot()` / `watchCatalogSnapshot()` → the whole catalog in one fetch
 - `listCatalog(...)` → `List<CatalogSlotView>` (search, paging, config-aware exclusions + labels)
 - `getCatalogSlot(code)` → `CatalogSlotView?`
@@ -289,10 +292,44 @@ runs in production.
 
 ## Money & currency
 
-All money is **minor units** (öre/cents). Offers are stored in the currency
-they were fetched in (`OfferView.currency`) — convert client-side with
-`OfferView.costInTargetMinor(rate)`. `winnerForSlot` compares converted cost
-and prefers in-stock offers.
+All money is **minor units** (öre/cents).
+
+The catalog is **genuinely mixed-currency**: every price is stored in the
+currency its winning supplier was fetched in (`CatalogSlotView.currency`,
+`OfferView.currency`) and is never normalised upstream — a single
+normalisation could only ever serve one shop. Converting is therefore a
+step you have to take, not one you can skip.
+
+The published snapshot carries the platform's `shopCurrency` and the FX
+`rates` into it. Attach them to your config bundle and the SDK restates
+prices for you:
+
+```dart
+final config = await rp.loadClientConfig(withRates: true);
+
+// Or, if you already hold a snapshot:
+final snap = await rp.loadCatalogSnapshot();
+final priced = config!.withRates(shopCurrency: snap!.shopCurrency, rates: snap.rates);
+
+final view = slot.applyClientConfig(priced, locale: 'sv');
+// view.currency is now the shop's; every money field on it was restated
+// together, so the view is never a mix of two currencies under one label.
+```
+
+A bundle **without** rates does not convert — it can only relabel — so a
+`CatalogSlotView` you apply it to keeps the supplier's currency. That is the
+pre-conversion behaviour, kept so attaching rates stays opt-in.
+
+**A missing rate is never treated as 1.0.** Every conversion entry point
+returns null instead: `CatalogSnapshot.convert`, `CatalogSlotView.inCurrency`,
+and `convertMinor` in the contract. After `applyClientConfig`, the case shows
+up as `displayPriceUnavailable == true` with a null `displayPriceMinor` —
+show "price unavailable" rather than falling back to `winningPriceMinor`,
+which would print a foreign-currency number under your own currency symbol.
+
+`winnerForSlot` compares cost within the offer set and prefers in-stock
+offers; `OfferView.costInTargetMinor(rate)` converts a single offer when you
+are holding a rate already.
 
 ## Scope
 

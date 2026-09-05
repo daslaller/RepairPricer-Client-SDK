@@ -315,6 +315,8 @@ class ClientConfigBundle {
     required this.config,
     List<FilterRule> filterRules = const [],
     List<TierNameOverride> tierNames = const [],
+    this.shopCurrency = '',
+    this.rates = const {},
   })  : filterRules = List.unmodifiable(filterRules),
         _excludedByKind = {
           for (final kind in FilterKind.values)
@@ -329,6 +331,49 @@ class ClientConfigBundle {
   final List<FilterRule> filterRules;
   final Map<FilterKind, Set<String>> _excludedByKind;
   final Map<String, TierNameOverride> _tierNamesByKey;
+
+  /// The platform's own currency, and FX rates into it — the same pair
+  /// [CatalogSnapshot] carries (`{'EUR': 11.3}` = €1 is 11.3 SEK when the
+  /// shop currency is SEK).
+  ///
+  /// The catalog is genuinely mixed-currency: a row's prices are in whatever
+  /// currency its winning supplier was fetched in, never normalised. Without
+  /// these, applying a config could only relabel prices into
+  /// [SubscriberConfig.displayCurrency] — which is how a EUR row came to be
+  /// shown as SEK.
+  ///
+  /// **Empty by default, and empty means "do not convert".** A bundle built
+  /// without them behaves exactly as it did before conversion existed, so
+  /// attaching rates is opt-in and nothing changes under an app that has not.
+  final String shopCurrency;
+  final Map<String, double> rates;
+
+  /// True when this bundle can actually convert — i.e. [withRates] has been
+  /// called with a snapshot's rates (or an equivalent pair).
+  bool get canConvert => shopCurrency.isNotEmpty;
+
+  /// A copy carrying [shopCurrency] and [rates], so config loaded from the
+  /// database can be combined with the FX pair a snapshot delivers:
+  ///
+  /// ```dart
+  /// final config = await rp.loadClientConfig();
+  /// final snap = await rp.loadCatalogSnapshot();
+  /// final priced = config?.withRates(
+  ///   shopCurrency: snap!.shopCurrency,
+  ///   rates: snap.rates,
+  /// );
+  /// ```
+  ClientConfigBundle withRates({
+    required String shopCurrency,
+    required Map<String, double> rates,
+  }) =>
+      ClientConfigBundle(
+        config: config,
+        filterRules: filterRules,
+        tierNames: tierNames,
+        shopCurrency: shopCurrency,
+        rates: rates,
+      );
 
   WinnerStrategy get strategy => config.strategy;
 

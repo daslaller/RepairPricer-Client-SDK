@@ -17,6 +17,8 @@ class CatalogSlotView {
     this.tierKey,
     this.displayTierName,
     this.displayPriceMinor,
+    this.displayCurrency,
+    this.displayPriceUnavailable = false,
     this.suggestedServiceFeeMinor,
     this.finalPriceToCustomerMinor,
     this.estimatedWorkMinutes,
@@ -42,10 +44,29 @@ class CatalogSlotView {
   /// Set only when a [ClientConfigBundle] was applied: the subscriber's own
   /// tier label ([displayTierName], defaults to [tierName] when no
   /// override) and — in custom pricing mode — their own margin pipeline run
-  /// on [costPriceMinor] ([displayPriceMinor]; null in platform mode, use
-  /// [winningPriceMinor]).
+  /// on [costPriceMinor] ([displayPriceMinor]; null in platform mode when no
+  /// conversion was needed, in which case [winningPriceMinor] already is the
+  /// display price).
   final String? displayTierName;
   final int? displayPriceMinor;
+
+  /// The currency [displayPriceMinor] is stated in — the subscriber's
+  /// [SubscriberConfig.displayCurrency] — set only when a config was applied.
+  ///
+  /// When the config carried rates and the row was in another currency,
+  /// [applyClientConfig] restates **every** money field on the returned view
+  /// and updates [currency] to match, so the view is never a mix.
+  final String? displayCurrency;
+
+  /// True when a config was applied, the row needed converting into
+  /// [SubscriberConfig.displayCurrency], and no rate was available.
+  ///
+  /// This exists so a null [displayPriceMinor] is not ambiguous. Without it,
+  /// "nothing to convert" and "could not convert" look identical, and a UI
+  /// falling back to [winningPriceMinor] would print a foreign-currency
+  /// number under the shop's own currency symbol — the exact bug conversion
+  /// is here to end. Show "price unavailable", not a number.
+  final bool displayPriceUnavailable;
   final int costPriceMinor;
   final int winningPriceMinor;
   final String currency;
@@ -86,39 +107,150 @@ class CatalogSlotView {
     );
   }
 
+  /// `?? this.x` cannot express "set this back to null", and
+  /// [applyClientConfig] genuinely needs to: applying a platform-mode config
+  /// to a view that already carries a display price must clear it, or a
+  /// second application would keep a stale figure from the first. Hence the
+  /// sentinel on the one field where null is a meaningful value to write.
+  static const Object _unset = Object();
+
+  CatalogSlotView _copyWith({
+    int? costPriceMinor,
+    int? winningPriceMinor,
+    String? currency,
+    Object? suggestedServiceFeeMinor = _unset,
+    Object? finalPriceToCustomerMinor = _unset,
+    String? displayTierName,
+    Object? displayPriceMinor = _unset,
+    String? displayCurrency,
+    bool? displayPriceUnavailable,
+  }) =>
+      CatalogSlotView(
+        code: code,
+        categoryPath: categoryPath,
+        deviceTypeName: deviceTypeName,
+        manufacturerName: manufacturerName,
+        modelName: modelName,
+        repairName: repairName,
+        tierName: tierName,
+        tierKey: tierKey,
+        displayTierName: displayTierName ?? this.displayTierName,
+        displayPriceMinor:
+            identical(displayPriceMinor, _unset) ? this.displayPriceMinor : displayPriceMinor as int?,
+        displayCurrency: displayCurrency ?? this.displayCurrency,
+        displayPriceUnavailable: displayPriceUnavailable ?? this.displayPriceUnavailable,
+        costPriceMinor: costPriceMinor ?? this.costPriceMinor,
+        winningPriceMinor: winningPriceMinor ?? this.winningPriceMinor,
+        currency: currency ?? this.currency,
+        inStock: inStock,
+        suggestedServiceFeeMinor: identical(suggestedServiceFeeMinor, _unset)
+            ? this.suggestedServiceFeeMinor
+            : suggestedServiceFeeMinor as int?,
+        finalPriceToCustomerMinor: identical(finalPriceToCustomerMinor, _unset)
+            ? this.finalPriceToCustomerMinor
+            : finalPriceToCustomerMinor as int?,
+        estimatedWorkMinutes: estimatedWorkMinutes,
+        estimatedWorkHours: estimatedWorkHours,
+        verificationStatus: verificationStatus,
+        verificationLevel: verificationLevel,
+        verificationTimestamp: verificationTimestamp,
+      );
+
+  /// This row with **every** money field restated in [target], and
+  /// [currency] updated to match — so the view is never a mix of two
+  /// currencies wearing one label.
+  ///
+  /// Returns **null** when [rates] cannot reach [target] from [currency].
+  /// That is deliberate and is the whole contract of this method: the
+  /// alternative to a null is a number that is wrong by an exchange rate, and
+  /// there is no safe default to substitute. `rateToShop: 1.0` is exactly the
+  /// assumption that presented EUR prices as SEK.
+  ///
+  /// [rates] and [shopCurrency] are the pair [CatalogSnapshot] publishes.
+  CatalogSlotView? inCurrency(
+    String target, {
+    required Map<String, double> rates,
+    required String shopCurrency,
+  }) {
+    final from = currency.trim().toUpperCase();
+    final to = target.trim().toUpperCase();
+    if (to.isEmpty) return null;
+    if (from == to) return this;
+
+    int? at(int? amount) => amount == null
+        ? null
+        : convertMinor(amount, from: from, to: to, rates: rates, shopCurrency: shopCurrency);
+
+    final cost = at(costPriceMinor);
+    final winning = at(winningPriceMinor);
+    if (cost == null || winning == null) return null;
+
+    return _copyWith(
+      costPriceMinor: cost,
+      winningPriceMinor: winning,
+      currency: to,
+      suggestedServiceFeeMinor: at(suggestedServiceFeeMinor),
+      finalPriceToCustomerMinor: at(finalPriceToCustomerMinor),
+    );
+  }
+
   /// Applies a subscriber's [ClientConfigBundle] to this row: their tier
-  /// label for [locale], and — when `pricing_mode` is `custom` — their own
-  /// margin/tax/rounding pipeline over [costPriceMinor].
+  /// label for [locale], their display currency, and — when `pricing_mode`
+  /// is `custom` — their own margin/tax/rounding pipeline over
+  /// [costPriceMinor].
+  ///
+  /// ## Currency
+  ///
+  /// Projection rows are stored in the **winning supplier's** currency and
+  /// are never normalised, so a row is routinely not in the shop's currency.
+  /// When [config] carries rates (see [ClientConfigBundle.withRates]) and the
+  /// two differ, the row is restated into
+  /// [SubscriberConfig.displayCurrency] via [inCurrency] **before** the
+  /// margin pipeline runs — the subscriber's rounding step and fixed margin
+  /// are denominated in their own currency, so converting first is what makes
+  /// "round to the nearest 5" mean five of the right unit.
+  ///
+  /// A bundle with no rates does not convert and behaves exactly as before
+  /// this existed. When conversion is needed but no rate is available,
+  /// [displayPriceUnavailable] is set and [displayPriceMinor] is left null —
+  /// show that as "price unavailable" rather than falling back to
+  /// [winningPriceMinor], which would be a foreign-currency number under the
+  /// shop's own symbol.
   CatalogSlotView applyClientConfig(ClientConfigBundle config, {required String locale}) {
-    final displayPrice = config.config.pricingMode == PricingMode.custom
-        ? computeOfferPricing(
-            rawPriceMinor: costPriceMinor,
-            config: config.config.toPricingConfig(),
-            rateToShop: 1.0,
-          ).finalPriceMinor
-        : null;
-    return CatalogSlotView(
-      code: code,
-      categoryPath: categoryPath,
-      deviceTypeName: deviceTypeName,
-      manufacturerName: manufacturerName,
-      modelName: modelName,
-      repairName: repairName,
-      tierName: tierName,
-      tierKey: tierKey,
-      displayTierName: config.tierLabel(tierKey, tierName, locale: locale),
+    final target = config.config.displayCurrency;
+    final tierName_ = config.tierLabel(tierKey, tierName, locale: locale);
+    final needsFx = config.canConvert && currency.trim().toUpperCase() != target.trim().toUpperCase();
+
+    final base = needsFx
+        ? inCurrency(target, rates: config.rates, shopCurrency: config.shopCurrency)
+        : this;
+    if (base == null) {
+      return _copyWith(
+        displayTierName: tierName_,
+        displayPriceMinor: null,
+        displayCurrency: target,
+        displayPriceUnavailable: true,
+      );
+    }
+
+    final displayPrice = switch (config.config.pricingMode) {
+      PricingMode.custom => computeOfferPricing(
+          rawPriceMinor: base.costPriceMinor,
+          config: config.config.toPricingConfig(),
+          // The cost is already in the subscriber's currency by here — a
+          // second FX factor would double-convert.
+          rateToShop: 1.0,
+        ).finalPriceMinor,
+      // Platform mode publishes `winningPriceMinor` as the display price, so
+      // there is nothing to add when no conversion happened. When one did,
+      // this is the converted figure and the caller needs it.
+      PricingMode.platform => needsFx ? base.winningPriceMinor : null,
+    };
+
+    return base._copyWith(
+      displayTierName: tierName_,
       displayPriceMinor: displayPrice,
-      costPriceMinor: costPriceMinor,
-      winningPriceMinor: winningPriceMinor,
-      currency: currency,
-      inStock: inStock,
-      suggestedServiceFeeMinor: suggestedServiceFeeMinor,
-      finalPriceToCustomerMinor: finalPriceToCustomerMinor,
-      estimatedWorkMinutes: estimatedWorkMinutes,
-      estimatedWorkHours: estimatedWorkHours,
-      verificationStatus: verificationStatus,
-      verificationLevel: verificationLevel,
-      verificationTimestamp: verificationTimestamp,
+      displayCurrency: target,
     );
   }
 }
