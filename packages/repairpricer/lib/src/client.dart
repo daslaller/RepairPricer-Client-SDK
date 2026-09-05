@@ -84,7 +84,15 @@ class RepairPricerClient {
   /// Rows are stored in the winning supplier's currency, so a bundle without
   /// rates can only relabel prices, not convert them. Prefer passing true
   /// unless the catalog is known to be single-currency.
-  Future<ClientConfigBundle?> loadClientConfig({String? teamId, bool withRates = false}) async {
+  ///
+  /// [maxRateAge] is the age past which the attached rates are refused
+  /// rather than used — a rate that exists but is weeks old converts to a
+  /// confidently wrong number. Pass `null` to accept rates of any age.
+  Future<ClientConfigBundle?> loadClientConfig({
+    String? teamId,
+    bool withRates = false,
+    Duration? maxRateAge = defaultMaxRateAge,
+  }) async {
     final configPage = await _db.listRows(
       databaseId: databaseId,
       tableId: 'subscriber_config',
@@ -109,7 +117,12 @@ class RepairPricerClient {
     if (!withRates) return bundle;
     final snapshot = await loadCatalogSnapshot();
     if (snapshot == null || snapshot.shopCurrency.isEmpty) return bundle;
-    return bundle.withRates(shopCurrency: snapshot.shopCurrency, rates: snapshot.rates);
+    return bundle.withRates(
+      shopCurrency: snapshot.shopCurrency,
+      rates: snapshot.rates,
+      asOf: snapshot.ratesAsOf,
+      maxAge: maxRateAge,
+    );
   }
 
   // ── Catalog snapshot ──────────────────────────────────────────────────
@@ -586,6 +599,7 @@ class RepairPricerClient {
     // The winner's cost is in ITS supplier's currency; the subscriber's
     // rounding step and fixed margin are in theirs. Convert first, or "round
     // to the nearest 5" rounds to five of the wrong unit.
+    if (config.ratesAreStale()) return null;
     final costMinor = config.canConvert
         ? convertMinor(
             winner.costPriceMinor,

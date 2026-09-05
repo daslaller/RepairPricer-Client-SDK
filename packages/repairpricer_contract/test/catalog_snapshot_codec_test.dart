@@ -119,4 +119,65 @@ void main() {
       expect(convertMinor(100, from: 'GBP', to: 'GBP', rates: r, shopCurrency: 'SEK'), 100);
     });
   });
+
+  group('rate staleness (additive)', () {
+    Map<String, dynamic> encode({DateTime? asOf, Map<String, double> rates = const {'EUR': 11.5}}) =>
+        encodeCatalogSnapshot(
+          generatedAt: DateTime.utc(2026, 9, 5),
+          devices: const [],
+          slots: const [],
+          shopCurrency: 'SEK',
+          rates: rates,
+          ratesAsOf: asOf,
+        );
+
+    test('the feed date round-trips, distinct from generated_at', () {
+      final doc = encode(asOf: DateTime.utc(2026, 8, 20));
+      expect(doc['rates_as_of'], '2026-08-20T00:00:00.000Z');
+      final back = decodeCatalogSnapshot(doc);
+      expect(back.ratesAsOf, DateTime.utc(2026, 8, 20));
+      expect(back.generatedAt, DateTime.utc(2026, 9, 5),
+          reason: 'a snapshot is republished every sync; its rates are not');
+    });
+
+    test('a date with no rates to date is not written', () {
+      final doc = encode(asOf: DateTime.utc(2026, 8, 20), rates: const {});
+      expect(doc.containsKey('rates_as_of'), isFalse);
+    });
+
+    test('an edition predating the field decodes with a null age', () {
+      final doc = encode()..remove('rates_as_of');
+      expect(decodeCatalogSnapshot(doc).ratesAsOf, isNull);
+    });
+
+    test('an unparseable date is null, not invented', () {
+      final doc = encode()..['rates_as_of'] = 'last tuesday';
+      expect(decodeCatalogSnapshot(doc).ratesAsOf, isNull);
+    });
+
+    test('ratesOlderThan measures the feed date', () {
+      final data = decodeCatalogSnapshot(encode(asOf: DateTime.utc(2026, 8, 20)));
+      final now = DateTime.utc(2026, 9, 5); // 16 days later
+      expect(data.ratesAge(now: now), const Duration(days: 16));
+      expect(data.ratesOlderThan(const Duration(days: 14), now: now), isTrue);
+      expect(data.ratesOlderThan(const Duration(days: 30), now: now), isFalse);
+    });
+
+    // Deliberately NOT the stricter "refuse unless proven fresh": editions
+    // published before this field existed carry no date, and treating them
+    // as stale would black out every subscriber still holding one — an
+    // outage caused by the fix. The platform enforces the same ceiling on
+    // `currency_rates.as_of`, where a date always exists.
+    test('unknown age means the rule does not apply', () {
+      final data = decodeCatalogSnapshot(encode()..remove('rates_as_of'));
+      expect(data.ratesAsOf, isNull);
+      expect(data.ratesAge(), isNull);
+      expect(data.ratesOlderThan(const Duration(days: 14)), isFalse);
+    });
+
+    test('no rates at all is not "stale" — there is nothing to convert with', () {
+      final data = decodeCatalogSnapshot(encode(rates: const {}));
+      expect(data.ratesOlderThan(const Duration(days: 1)), isFalse);
+    });
+  });
 }

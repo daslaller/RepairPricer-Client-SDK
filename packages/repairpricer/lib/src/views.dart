@@ -211,7 +211,8 @@ class CatalogSlotView {
   /// "round to the nearest 5" mean five of the right unit.
   ///
   /// A bundle with no rates does not convert and behaves exactly as before
-  /// this existed. When conversion is needed but no rate is available,
+  /// this existed. When conversion is needed but no rate is available — or
+  /// the bundle's rates are older than [ClientConfigBundle.maxRateAge] —
   /// [displayPriceUnavailable] is set and [displayPriceMinor] is left null —
   /// show that as "price unavailable" rather than falling back to
   /// [winningPriceMinor], which would be a foreign-currency number under the
@@ -221,9 +222,12 @@ class CatalogSlotView {
     final tierName_ = config.tierLabel(tierKey, tierName, locale: locale);
     final needsFx = config.canConvert && currency.trim().toUpperCase() != target.trim().toUpperCase();
 
-    final base = needsFx
+    // Stale rates are refused, not used: a rate that exists but is weeks old
+    // converts to a confidently wrong number, which is the one failure the
+    // null-never-1.0 rule cannot catch. Treated exactly like a missing rate.
+    final base = needsFx && !config.ratesAreStale()
         ? inCurrency(target, rates: config.rates, shopCurrency: config.shopCurrency)
-        : this;
+        : (needsFx ? null : this);
     if (base == null) {
       return _copyWith(
         displayTierName: tierName_,

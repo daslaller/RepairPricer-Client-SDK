@@ -327,6 +327,34 @@ up as `displayPriceUnavailable == true` with a null `displayPriceMinor` —
 show "price unavailable" rather than falling back to `winningPriceMinor`,
 which would print a foreign-currency number under your own currency symbol.
 
+### Stale rates
+
+A rate that *exists* but is weeks old is the one wrong number that rule
+cannot catch: it converts, confidently, at a price that stopped being true.
+A snapshot is re-published on every platform sync whether or not the sync's
+rate refresh succeeded, so `generatedAt` can be minutes old while the rates
+are far older.
+
+Editions therefore carry `ratesAsOf` — the date the FX **feed** published
+them, not the snapshot's own timestamp:
+
+```dart
+snapshot.ratesAge;                              // Duration? since the feed date
+snapshot.ratesAreStale();                       // past defaultMaxRateAge (14 days)
+snapshot.ratesAreStale(maxAge: Duration(days: 3));
+```
+
+A bundle built by `withRates` / `loadClientConfig(withRates: true)` applies
+`defaultMaxRateAge` and **refuses** to convert past it — the same outcome as
+a missing rate, `displayPriceUnavailable == true`. Pass `maxAge: null` to
+accept rates of any age.
+
+A snapshot with **no** `ratesAsOf` (an edition published before the field
+existed) converts normally: an unknown age is not read as stale, because
+doing so would black out every subscriber still holding an older edition.
+The platform enforces the same ceiling on its own side, where a date always
+exists.
+
 `winnerForSlot` compares cost within the offer set and prefers in-stock
 offers; `OfferView.costInTargetMinor(rate)` converts a single offer when you
 are holding a rate already.

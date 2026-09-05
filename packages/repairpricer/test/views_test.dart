@@ -141,6 +141,70 @@ void main() {
         expect(view.displayCurrency, 'SEK');
       });
 
+      // A rate that EXISTS but is weeks old is the one wrong number the
+      // null-never-1.0 rule cannot catch: it converts, confidently, at a
+      // price that stopped being true. Refused, exactly like a missing rate.
+      group('staleness', () {
+        ClientConfigBundle aged(DateTime? asOf, {Duration? maxAge = defaultMaxRateAge}) =>
+            ClientConfigBundle(config: SubscriberConfig.defaults(teamId: 't1')).withRates(
+              shopCurrency: shop,
+              rates: rates,
+              asOf: asOf,
+              maxAge: maxAge,
+            );
+
+        test('fresh rates convert normally', () {
+          final bundle = aged(DateTime.now().toUtc().subtract(const Duration(days: 2)));
+          expect(bundle.ratesAreStale(), isFalse);
+          final view = eurSlot().applyClientConfig(bundle, locale: 'sv');
+          expect(view.currency, 'SEK');
+          expect(view.displayPriceUnavailable, isFalse);
+        });
+
+        test('rates past the max age are refused, not used', () {
+          final bundle = aged(DateTime.now().toUtc().subtract(const Duration(days: 30)));
+          expect(bundle.ratesAreStale(), isTrue);
+          final view = eurSlot().applyClientConfig(bundle, locale: 'sv');
+          expect(view.displayPriceUnavailable, isTrue);
+          expect(view.displayPriceMinor, isNull);
+          expect(view.currency, 'EUR', reason: 'left honest, not converted at a stale rate');
+        });
+
+        // The migration path: a snapshot published before the platform
+        // recorded a feed date still converts, rather than every subscriber
+        // on an older edition losing every price at once.
+        test('an unknown rate date leaves the rule inapplicable', () {
+          final bundle = aged(null);
+          expect(bundle.ratesAreStale(), isFalse);
+          expect(eurSlot().applyClientConfig(bundle, locale: 'sv').currency, 'SEK');
+        });
+
+        test('maxAge: null accepts rates of any age', () {
+          final bundle = aged(DateTime.utc(2020), maxAge: null);
+          expect(bundle.ratesAreStale(), isFalse);
+          expect(eurSlot().applyClientConfig(bundle, locale: 'sv').currency, 'SEK');
+        });
+
+        test('staleness is not the same as having no rates', () {
+          // No rates: do not convert, leave prices alone (pre-conversion
+          // behaviour). Stale rates: refuse, and say so.
+          final none = ClientConfigBundle(config: SubscriberConfig.defaults(teamId: 't1'));
+          expect(none.canConvert, isFalse);
+          expect(none.ratesAreStale(), isFalse);
+          expect(eurSlot().applyClientConfig(none, locale: 'sv').displayPriceUnavailable, isFalse);
+
+          final stale = aged(DateTime.utc(2020));
+          expect(stale.canConvert, isTrue);
+          expect(stale.ratesAreStale(), isTrue);
+        });
+
+        test('withRates defaults to the shared max age', () {
+          final bundle = ClientConfigBundle(config: SubscriberConfig.defaults(teamId: 't1'))
+              .withRates(shopCurrency: shop, rates: rates, asOf: DateTime.now().toUtc());
+          expect(bundle.maxRateAge, defaultMaxRateAge);
+        });
+      });
+
       test('a same-currency row is untouched and adds no display price', () {
         final sekSlot = CatalogSlotView.fromRow(const {
           'code': 'rp-sek',

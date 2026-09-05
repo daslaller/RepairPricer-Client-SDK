@@ -63,6 +63,7 @@ class CatalogSnapshotData {
     required this.slots,
     this.shopCurrency = '',
     this.rates = const {},
+    this.ratesAsOf,
   });
 
   final int version;
@@ -87,7 +88,62 @@ class CatalogSnapshotData {
   /// a currency the platform has no rate for. Treat a missing entry as
   /// "cannot convert", never as 1.0 — see [rateBetween].
   final Map<String, double> rates;
+
+  /// The date the FX feed itself published [rates] — **not** when the
+  /// snapshot was written.
+  ///
+  /// The two come apart, and that is the whole point of carrying this. The
+  /// platform re-publishes a snapshot on every sync whether or not the rate
+  /// refresh succeeded, so [generatedAt] can be minutes old while [rates]
+  /// are weeks old. Without this field a stale rate is indistinguishable
+  /// from a fresh one, and the reader converts at it silently — the one
+  /// failure mode [rateBetween]'s null-never-1.0 rule cannot catch, because
+  /// there IS a rate, it is just wrong now.
+  ///
+  /// Null on editions published before this field existed, and on any
+  /// edition whose rates predate the platform recording a date. Null means
+  /// **age unknown**, and every staleness check here treats that as "the
+  /// rule does not apply" rather than as stale.
+  ///
+  /// That is a deliberate choice against the stricter reading. "Refuse
+  /// unless proven fresh" is the safer instinct, but applied here it would
+  /// black out every subscriber still holding a snapshot published before
+  /// this field existed — an outage caused by the fix, not the bug. The real
+  /// enforcement point is the platform, which reads `currency_rates.as_of`
+  /// directly and always has a date; this check is the second line, and it
+  /// engages by itself once editions start carrying one.
+  final DateTime? ratesAsOf;
+
+  /// How old [rates] are relative to [now] (defaults to the current time),
+  /// or null when [ratesAsOf] is absent.
+  Duration? ratesAge({DateTime? now}) => ratesAsOf == null
+      ? null
+      : (now ?? DateTime.now().toUtc()).difference(ratesAsOf!);
+
+  /// True when [rates] are demonstrably older than [maxAge].
+  ///
+  /// False when there are no rates (nothing to be stale) and when
+  /// [ratesAsOf] is null (age unknown — see that field for why unknown is
+  /// not read as stale).
+  ///
+  /// A reader that enforces this should behave as though the rate were
+  /// missing (refuse to convert, show "price unavailable"), not fall back to
+  /// the unconverted figure. Both are honest; a stale conversion is not.
+  bool ratesOlderThan(Duration maxAge, {DateTime? now}) {
+    if (rates.isEmpty) return false;
+    final age = ratesAge(now: now);
+    return age != null && age > maxAge;
+  }
 }
+
+/// A sensible ceiling on FX age for a repair-price display, and the default
+/// [ClientConfigBundle] applies when rates come from a snapshot.
+///
+/// The ECB publishes every business day and the platform refreshes on a
+/// several-hour cadence, so rates this old do not mean a transient outage —
+/// they mean the refresh has been broken for a fortnight. Chosen to never
+/// fire on a blip and still catch real rot.
+const Duration defaultMaxRateAge = Duration(days: 14);
 
 /// Converts [amountMinor] from [from] into [to] using [rates] expressed in
 /// [shopCurrency]. Returns null when either leg has no rate — the caller
@@ -142,6 +198,7 @@ Map<String, dynamic> encodeCatalogSnapshot({
   required Iterable<Map<String, dynamic>> slots,
   String shopCurrency = '',
   Map<String, double> rates = const {},
+  DateTime? ratesAsOf,
 }) {
   List<Map<String, dynamic>> strip(
           Iterable<Map<String, dynamic>> rows, List<String> columns) =>
@@ -165,6 +222,10 @@ Map<String, dynamic> encodeCatalogSnapshot({
       'rates': {
         for (final e in rates.entries) e.key.toUpperCase(): e.value,
       },
+    // The FEED's publication date, not this snapshot's. Only written
+    // alongside actual rates — a date with nothing to date is noise.
+    if (rates.isNotEmpty && ratesAsOf != null)
+      'rates_as_of': ratesAsOf.toUtc().toIso8601String(),
   };
 }
 
@@ -216,5 +277,8 @@ CatalogSnapshotData decodeCatalogSnapshot(Map<String, dynamic> json) {
     slots: rows('slots'),
     shopCurrency: '${json['shop_currency'] ?? ''}'.toUpperCase(),
     rates: rates,
+    // Unparseable is left null — "age unknown" — which ratesOlderThan
+    // treats as stale. An invented date would be the same lie as a 1.0 rate.
+    ratesAsOf: DateTime.tryParse('${json['rates_as_of'] ?? ''}')?.toUtc(),
   );
 }

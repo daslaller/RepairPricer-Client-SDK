@@ -15,6 +15,7 @@
 /// A team without a config row behaves exactly as before this layer existed.
 library;
 
+import 'catalog_snapshot_codec.dart' show defaultMaxRateAge;
 import 'pricing_config.dart';
 
 /// Whether the subscriber shows the platform's precomputed `winning_price`
@@ -317,6 +318,8 @@ class ClientConfigBundle {
     List<TierNameOverride> tierNames = const [],
     this.shopCurrency = '',
     this.rates = const {},
+    this.ratesAsOf,
+    this.maxRateAge,
   })  : filterRules = List.unmodifiable(filterRules),
         _excludedByKind = {
           for (final kind in FilterKind.values)
@@ -348,9 +351,40 @@ class ClientConfigBundle {
   final String shopCurrency;
   final Map<String, double> rates;
 
+  /// The date the FX feed published [rates], and the age past which this
+  /// bundle refuses to use them.
+  ///
+  /// Null [maxRateAge] disables the check entirely — the default, so a
+  /// bundle built by hand behaves as it did before staleness existed.
+  /// [withRates] applies [defaultMaxRateAge] unless told otherwise.
+  ///
+  /// The platform re-publishes a snapshot on every sync whether or not its
+  /// rate refresh succeeded, so rates can be far older than the catalog
+  /// carrying them. That is the gap this closes: a missing rate was already
+  /// loud (null, never 1.0), while a three-week-old one converted silently.
+  final DateTime? ratesAsOf;
+  final Duration? maxRateAge;
+
   /// True when this bundle can actually convert — i.e. [withRates] has been
   /// called with a snapshot's rates (or an equivalent pair).
+  ///
+  /// Unrelated to [ratesAreStale]: "no rates attached" means *do not
+  /// convert* and leave prices in their own currency, which is the
+  /// pre-conversion behaviour. Stale rates mean *refuse to convert*, which
+  /// surfaces as [CatalogSlotView.displayPriceUnavailable]. Collapsing the
+  /// two would turn a broken FX feed into a silent currency relabel.
   bool get canConvert => shopCurrency.isNotEmpty;
+
+  /// True when [maxRateAge] is set and [rates] are demonstrably older than
+  /// it. An unknown [ratesAsOf] means the check does not apply — see
+  /// `CatalogSnapshotData.ratesAsOf` for why, and note that the platform
+  /// enforces the same ceiling on its own side where a date always exists.
+  bool ratesAreStale({DateTime? now}) {
+    final maxAge = maxRateAge;
+    final asOf = ratesAsOf;
+    if (maxAge == null || asOf == null || !canConvert) return false;
+    return (now ?? DateTime.now().toUtc()).difference(asOf) > maxAge;
+  }
 
   /// A copy carrying [shopCurrency] and [rates], so config loaded from the
   /// database can be combined with the FX pair a snapshot delivers:
@@ -363,9 +397,15 @@ class ClientConfigBundle {
   ///   rates: snap.rates,
   /// );
   /// ```
+  /// [asOf] is the date the FX feed published [rates] —
+  /// `CatalogSnapshotData.ratesAsOf`, not the snapshot's own timestamp.
+  /// [maxAge] defaults to [defaultMaxRateAge]; pass `null` explicitly to
+  /// accept rates of any age.
   ClientConfigBundle withRates({
     required String shopCurrency,
     required Map<String, double> rates,
+    DateTime? asOf,
+    Duration? maxAge = defaultMaxRateAge,
   }) =>
       ClientConfigBundle(
         config: config,
@@ -373,6 +413,8 @@ class ClientConfigBundle {
         tierNames: tierNames,
         shopCurrency: shopCurrency,
         rates: rates,
+        ratesAsOf: asOf,
+        maxRateAge: maxAge,
       );
 
   WinnerStrategy get strategy => config.strategy;
