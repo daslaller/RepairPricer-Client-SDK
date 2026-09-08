@@ -32,6 +32,7 @@ class CatalogSnapshot {
     required this.slots,
     this.shopCurrency = '',
     this.rates = const {},
+    this.ratesAsOf,
   });
 
   final DateTime generatedAt;
@@ -48,6 +49,29 @@ class CatalogSnapshot {
   /// map directly, so a missing rate stays visible instead of defaulting.
   final String shopCurrency;
   final Map<String, double> rates;
+
+  /// The date the FX feed published [rates] — not [generatedAt], which is
+  /// when this snapshot was written. A snapshot is re-published on every
+  /// platform sync whether or not its rate refresh succeeded, so the two
+  /// come apart exactly when it matters. Null means the age is unknown.
+  final DateTime? ratesAsOf;
+
+  /// How old [rates] are, or null when [ratesAsOf] is absent.
+  Duration? get ratesAge =>
+      ratesAsOf == null ? null : DateTime.now().toUtc().difference(ratesAsOf!);
+
+  /// True when [rates] are demonstrably older than [maxAge] (default
+  /// [defaultMaxRateAge]). False when the age is unknown — see
+  /// `CatalogSnapshotData.ratesAsOf`.
+  ///
+  /// Convert only when this is false, or show the price as unavailable — a
+  /// stale conversion is the one wrong number the null-never-1.0 rule cannot
+  /// catch, because there IS a rate, it just stopped being true.
+  bool ratesAreStale({Duration maxAge = defaultMaxRateAge}) {
+    if (rates.isEmpty) return false;
+    final age = ratesAge;
+    return age != null && age > maxAge;
+  }
 
   /// Converts a minor-unit amount between currencies using this edition's
   /// rates. **Null when the rate is unknown** — deliberately not 1.0, which
@@ -82,6 +106,7 @@ class CatalogSnapshot {
       slots: [for (final row in data.slots) CatalogSlotView.fromRow(row)],
       shopCurrency: data.shopCurrency,
       rates: data.rates,
+      ratesAsOf: data.ratesAsOf,
     );
   }
 }
