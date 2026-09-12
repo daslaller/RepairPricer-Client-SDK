@@ -1,4 +1,4 @@
-# Products and merchant checkout
+# Products, shop management and checkout
 
 RepairPricer has two independent catalog surfaces. The existing device/repair
 API and booking widget describe repairs. `RepairPricerClient.products` describes
@@ -87,3 +87,46 @@ Origin restrictions configured by the shop must match the browser transport;
 they are embedding controls, not authentication for a public widget key.
 
 Repair configuration, pricing math and booking APIs remain separate.
+## Shop management and optional Stripe checkout
+
+`ShopAdminClient` is the authenticated owner/admin surface for a shop team.
+It manages a selected supplier assortment, merchant-owned products, nested
+bundles and shop settings independently of repair configuration. The private
+server verifies membership, management role and product entitlement per call.
+Subscribers cannot grant themselves an entitlement or set supplier costs/stock.
+
+`ManagedShopProduct` distinguishes `supplier`, `own`, and `bundle` sources.
+Bundles reference other products in the same shop with positive quantities;
+the server rejects missing references and cycles. `ShopPriceRule` supports a
+shop default, fixed display price, markup on cost and profit margin on selling
+price. Rates use basis points and money uses integer minor units. The public
+contract implements the same integer pricing math used by the server.
+
+Save methods require the revision from `load()`. A conflict requires reloading
+the shop before retrying. Console settings include VAT, allowed website origins,
+retail pricing, shipping and `ShopCheckoutMode.merchant` or `.stripe`.
+
+The merchant mode keeps the existing checkout callback. With Stripe,
+`connectStripe()` requests a server-generated onboarding URL; `stripeStatus()`
+returns readiness without exposing keys. The platform must configure its
+server integration and webhook before live use. No Stripe secret belongs in
+this Flutter SDK. The merchant remains responsible for fulfillment.
+
+`ShopClient.stripeCheckout(lines, requestId: ..., expectedSubtotalMinor: ...)`
+returns a validated Stripe Checkout URL. Generate a unique request ID for a new
+cart and keep the same ID and payload when retrying an interrupted request.
+The server independently re-prices and checks stock. Retry that checkout call
+directly: a fresh quote may see stock held by the earlier attempt. `orders`,
+`reconcileOrder` and `fulfillOrder` are available through `ShopAdminClient.call`.
+Payment confirmation comes from the server's verified webhook, never a redirect.
+
+If `ShopException.resetCheckout` is true, that attempt is finished or rejected
+before a session was created. Re-quote, let the shopper review changes, and use a
+new request ID. For timeouts and other ambiguous errors, retry the same request
+ID and payload. Do not automatically create a second checkout attempt.
+
+Owner/admin calls can use `call('previewProduct', fields: {'product': ...})` to
+preview a draft using authoritative costs. `enrichImages` accepts an optional
+canonical product page URL when a supplier's short SKU route is unavailable.
+Own stock means total units stocked; the server deducts committed managed orders.
+Custom checkout backends own their stock reservations and order workflow.

@@ -27,3 +27,4 @@ export 'src/snapshot.dart';
 export 'src/translations.dart';
 export 'src/views.dart';
 export 'src/products.dart';
+export 'src/shop_admin.dart';

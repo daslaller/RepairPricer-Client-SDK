@@ -146,8 +146,8 @@ class ShopClient {
     final response =
         await _transport({'widgetKey': widgetKey, 'action': action, ...values});
     if (response['ok'] != true) {
-      throw ShopException(
-          response['error'] as String? ?? 'Shop request failed');
+      throw ShopException(response['error'] as String? ?? 'Shop request failed',
+          resetCheckout: response['resetCheckout'] == true);
     }
     return response;
   }
@@ -204,11 +204,39 @@ class ShopClient {
     return handler(ShopCheckoutHandoff(
         widgetKey: widgetKey, lines: lines, quote: current));
   }
+
+  /// Create/recover a managed Stripe Checkout Session. Retain [requestId] for
+  /// retries of this exact cart. The server re-prices and refuses a changed
+  /// subtotal; the displayed quote never authorizes a browser-supplied price.
+  Future<Uri> stripeCheckout(List<ShopCartLine> lines,
+      {required String requestId, required int expectedSubtotalMinor}) async {
+    if (!RegExp(r'^[a-zA-Z0-9_-]{16,128}$').hasMatch(requestId)) {
+      throw ArgumentError('A stable unique checkout request ID is required');
+    }
+    final result = await _call('checkout', {
+      'requestId': requestId,
+      'lines': lines.map((l) => l.toJson()).toList(),
+      'expectedSubtotalMinor': expectedSubtotalMinor
+    });
+    final uri = Uri.parse(result['url'] as String);
+    if (uri.scheme != 'https' ||
+        uri.host != 'checkout.stripe.com' ||
+        uri.userInfo.isNotEmpty ||
+        uri.hasPort) {
+      throw const ShopException('Invalid Stripe checkout URL');
+    }
+    return uri;
+  }
 }
 
 class ShopException implements Exception {
-  const ShopException(this.message);
+  const ShopException(this.message, {this.resetCheckout = false});
   final String message;
+
+  /// The server confirmed this checkout attempt is finished or rejected before
+  /// creating a session. Re-quote, review the cart and start a new request ID.
+  /// Otherwise preserve the existing request ID when retrying network failures.
+  final bool resetCheckout;
   @override
   String toString() => 'ShopException: $message';
 }

@@ -27,3 +27,4 @@ export 'src/verification.dart';
 export 'src/winner_selector.dart';
 export 'src/product_catalog.dart';
 export 'src/shop_cart.dart';
+export 'src/shop_management.dart';
