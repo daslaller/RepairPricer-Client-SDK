@@ -10,6 +10,7 @@ import 'offer_query.dart';
 import 'snapshot.dart';
 import 'translations.dart';
 import 'views.dart';
+import 'products.dart';
 
 /// Subscriber-facing client over the RepairPricer Appwrite project, built on
 /// the **client** SDK (`package:appwrite`).
@@ -37,9 +38,11 @@ class RepairPricerClient {
     Client client, {
     this.databaseId = 'repair_pricer',
     this.configFunctionId = 'subscriber_config_admin',
+    String productCatalogFunctionId = 'product_catalog_read',
     this.snapshotBucketId = 'snapshots',
     this.snapshotFileId = 'catalog_snapshot',
-  })  : _db = TablesDB(client),
+  })  : products = ProductCatalogClient(client, functionId: productCatalogFunctionId),
+        _db = TablesDB(client),
         _functions = Functions(client),
         _storage = Storage(client),
         _realtime = Realtime(client);
@@ -49,6 +52,9 @@ class RepairPricerClient {
   final Storage _storage;
   final Realtime _realtime;
   final String databaseId;
+
+  /// Product catalog is a separate subscription surface from repair slots.
+  final ProductCatalogClient products;
 
   /// The `subscriber_config_admin` Function the write helpers invoke.
   final String configFunctionId;
