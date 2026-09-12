@@ -25,3 +25,5 @@ export 'src/pricing_pipeline.dart';
 export 'src/subscriber_config.dart';
 export 'src/verification.dart';
 export 'src/winner_selector.dart';
+export 'src/product_catalog.dart';
+export 'src/shop_cart.dart';
