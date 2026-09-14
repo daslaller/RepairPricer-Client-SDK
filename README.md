@@ -5,6 +5,10 @@ repository; it contains no part of the commercial product's server side.
 
 Two packages:
 
+Product Catalog and shop support are described in
+[Products and merchant checkout](docs/products-and-shop.md). The product module
+has its own entitlement; checkout and payment belong to the subscribing shop.
+
 | Package | What it is |
 |---|---|
 | [`packages/repairpricer`](packages/repairpricer) | The Flutter subscriber SDK. **This is the one you depend on.** |
