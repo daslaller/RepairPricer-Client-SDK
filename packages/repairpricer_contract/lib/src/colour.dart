@@ -15,6 +15,8 @@
 /// this contract; only the vocabulary and its parsing are.
 library;
 
+import 'dart:convert';
+
 /// Every key the platform may send, in display order (dark to light, then
 /// hues, then metals and materials).
 ///
@@ -58,6 +60,16 @@ String? parseColourKey(Object? value) {
   return _known.contains(key) ? key : null;
 }
 
+/// [value] decoded when it is a JSON-encoded list, else unchanged.
+Object? _decodeList(Object? value) {
+  if (value is! String || !value.trimLeft().startsWith('[')) return value;
+  try {
+    return jsonDecode(value);
+  } on FormatException {
+    return null;
+  }
+}
+
 /// Throws when [key] is not one of [colourKeys]. For writers: a reader drops
 /// unknown keys silently, so a writer that produces one loses data quietly.
 void validateColourKey(String key) {
@@ -66,10 +78,13 @@ void validateColourKey(String key) {
   }
 }
 
-/// A list of keys as stored (an Appwrite string array) parsed into known
-/// keys: unknown and repeated entries dropped, order kept. Anything that is
-/// not a list reads as empty.
+/// A list of keys as stored parsed into known keys: unknown and repeated
+/// entries dropped, order kept. Accepts an Appwrite string array or the same
+/// list JSON-encoded in a text column (the engine's `*_json` convention), so
+/// the storage choice cannot silently empty every reader. Anything else
+/// reads as empty.
 List<String> parseColourKeys(Object? value) {
+  value = _decodeList(value);
   if (value is! List) return const [];
   final out = <String>[];
   for (final item in value) {
@@ -97,6 +112,8 @@ class ModelColour {
   /// an unknown key is dropped together with its own label and never shifts
   /// the others; a missing or short label list falls back to the key.
   static List<ModelColour> fromColumns(Object? keys, Object? labels) {
+    keys = _decodeList(keys);
+    labels = _decodeList(labels);
     if (keys is! List) return const [];
     final names = labels is List ? labels : const [];
     final seen = <String>{};

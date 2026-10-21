@@ -32,6 +32,9 @@ void main() {
       expect(parseColourKeys(['blue', 'BLACK', 'teal', 'blue']),
           ['blue', 'black']);
       expect(parseColourKeys('black'), isEmpty);
+      // The same list JSON-encoded in a text column reads the same.
+      expect(parseColourKeys('["blue","BLACK","teal"]'), ['blue', 'black']);
+      expect(parseColourKeys('[not json'), isEmpty);
       expect(parseColourKeys(null), isEmpty);
     });
 
@@ -48,6 +51,8 @@ void main() {
       ]);
       expect(colours.last.label, 'blue');
       expect(ModelColour.fromColumns(null, ['x']), isEmpty);
+      expect(ModelColour.fromColumns('["black"]', '["Midnight"]'),
+          [ModelColour(key: 'black', label: 'Midnight')]);
     });
 
     test('a model colour refuses an unknown key', () {
