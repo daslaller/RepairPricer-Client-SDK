@@ -327,4 +327,58 @@ void main() {
       expect(dict.label('part_type', 'unknown', locale: 'sv'), 'unknown'); // key
     });
   });
+
+  group('colours (additive columns)', () {
+    test('an offer reads its colour key and supplier label', () {
+      final offer = OfferView.fromRow(const {
+        'code': 'rp-1',
+        'offer_id': 'o1',
+        'supplier_name': 'G-SP',
+        'product_name': 'iPhone 12/12 Pro Laddkontakt Flexkabel - Guld',
+        'colour': 'gold',
+        'colour_label': 'Guld',
+      });
+      expect(offer.colour, 'gold');
+      expect(offer.colourLabel, 'Guld');
+    });
+
+    test('an offer without a colour, or with an unknown key, is unplaced', () {
+      final none = OfferView.fromRow(const {'code': 'rp-1', 'offer_id': 'o1'});
+      expect(none.colour, isNull);
+      final newer = OfferView.fromRow(
+          const {'code': 'rp-1', 'offer_id': 'o2', 'colour': 'teal', 'colour_label': 'Teal'});
+      expect(newer.colour, isNull);
+      expect(newer.colourLabel, isNull);
+    });
+
+    test('a slot lists its offered colours and keeps them through config', () {
+      final view = CatalogSlotView.fromRow(const {
+        'code': 'rp-1',
+        'model_name': 'iPhone 13',
+        'repair_name': 'Back Glass',
+        'tier_name': 'OEM',
+        'cost_price': 1200,
+        'winning_price': 1800,
+        'offered_colours': ['black', 'blue', 'teal'],
+      });
+      expect(view.offeredColours, ['black', 'blue']);
+      final configured = view.applyClientConfig(
+          ClientConfigBundle(config: SubscriberConfig.defaults(teamId: 't1')),
+          locale: 'sv');
+      expect(configured.offeredColours, ['black', 'blue']);
+      expect(CatalogSlotView.fromRow(const {'code': 'rp-2'}).offeredColours, isEmpty);
+    });
+
+    test('a device pairs colour keys with the manufacturer names', () {
+      final device = RepairPricerDevice.fromRow(const {
+        'manufacturer_name': 'Apple',
+        'model_name': 'iPhone 13',
+        'colours': ['black', 'white'],
+        'colour_labels': ['Midnight', 'Starlight'],
+      });
+      expect(device.colours.map((c) => c.label), ['Midnight', 'Starlight']);
+      expect(device.colours.first.key, 'black');
+      expect(RepairPricerDevice.fromRow(const {'model_name': 'x'}).colours, isEmpty);
+    });
+  });
 }

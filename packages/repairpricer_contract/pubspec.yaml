@@ -5,7 +5,7 @@ description: >
   selection, the catalog-snapshot codec, and the verification badge
   vocabulary. Shared verbatim by the RepairPricer Flutter SDK and the
   RepairPricer server engine. No Appwrite, no Flutter, no dart:io.
-version: 0.1.0
+version: 0.2.0
 repository: https://github.com/daslaller/RepairPricer-Client-SDK
 issue_tracker: https://github.com/daslaller/RepairPricer-Client-SDK/issues
 publish_to: 'none'
