@@ -20,6 +20,7 @@
 library;
 
 export 'src/catalog_snapshot_codec.dart';
+export 'src/colour.dart';
 export 'src/pricing_config.dart';
 export 'src/pricing_pipeline.dart';
 export 'src/subscriber_config.dart';

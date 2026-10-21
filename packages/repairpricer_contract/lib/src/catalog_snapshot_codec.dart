@@ -27,6 +27,10 @@ const List<String> snapshotDeviceColumns = [
   'manufacturer_name',
   'model_name',
   'external_uid',
+  // Additive (no version bump): the colours the model is sold in, keys and
+  // the manufacturer's names at the same positions. See `ModelColour`.
+  'colours',
+  'colour_labels',
 ];
 
 /// Columns copied per `catalog_projection` row — the set
@@ -51,6 +55,10 @@ const List<String> snapshotSlotColumns = [
   'verification_status',
   'verification_level',
   'verification_timestamp',
+  // Additive (no version bump): the colour keys this slot's offers come in,
+  // across every supplier, winners and losers. A view over the offers'
+  // own colours, not a second source.
+  'offered_colours',
 ];
 
 /// A decoded snapshot: raw projection rows plus provenance. Typed wrapping

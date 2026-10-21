@@ -26,6 +26,7 @@ class CatalogSlotView {
     this.verificationStatus = VerificationStatus.generic,
     this.verificationLevel,
     this.verificationTimestamp,
+    this.offeredColours = const [],
   });
 
   final String code;
@@ -79,6 +80,13 @@ class CatalogSlotView {
   final VerificationLevel? verificationLevel;
   final DateTime? verificationTimestamp;
 
+  /// Colour keys ([colourKeys]) this slot's offers come in, across every
+  /// supplier, winners and losers. Empty when no offer states a colour, or
+  /// on rows written before the column existed — never read that as "this
+  /// part has no colours". A part's colours are often not the phone's (a
+  /// screen in black only), so prefer this over the model's list when set.
+  final List<String> offeredColours;
+
   /// Badge for UI: Verified | Generic | Not-Verifiable.
   String get verificationBadge => verificationStatus.badgeLabel;
 
@@ -104,6 +112,7 @@ class CatalogSlotView {
       verificationStatus: VerificationStatus.fromKey(row['verification_status'] as String?),
       verificationLevel: VerificationLevel.fromKey(row['verification_level'] as String?),
       verificationTimestamp: ts is String ? DateTime.tryParse(ts)?.toUtc() : null,
+      offeredColours: parseColourKeys(row['offered_colours']),
     );
   }
 
@@ -154,6 +163,7 @@ class CatalogSlotView {
         verificationStatus: verificationStatus,
         verificationLevel: verificationLevel,
         verificationTimestamp: verificationTimestamp,
+        offeredColours: offeredColours,
       );
 
   /// This row with **every** money field restated in [target], and
@@ -275,6 +285,8 @@ class OfferView {
     this.productName,
     this.productUrl,
     this.rawAttributeLabel,
+    this.colour,
+    this.colourLabel,
   });
 
   final String code;
@@ -300,12 +312,22 @@ class OfferView {
   final String currency;
   final bool inStock;
 
+  /// The part's colour as a key from [colourKeys], or null when the supplier
+  /// states none the platform could read with certainty. Null means
+  /// unplaced: never match it to a guessed variant.
+  final String? colour;
+
+  /// The supplier's own word for [colour] ("Midnight", "Svart"); null
+  /// whenever [colour] is.
+  final String? colourLabel;
+
   /// Convert [costPriceMinor] into [targetCurrency] using [rateFromOfferToTarget]
   /// (units of target per 1 unit of offer currency).
   int costInTargetMinor(double rateFromOfferToTarget) =>
       (costPriceMinor * rateFromOfferToTarget).round();
 
   factory OfferView.fromRow(Map<String, dynamic> row) {
+    final colour = parseColourKey(row['colour']);
     return OfferView(
       code: row['code'] as String? ?? '',
       offerId: row['offer_id'] as String? ?? '',
@@ -319,6 +341,8 @@ class OfferView {
       shelfPriceMinor: (row['shelf_price'] as num?)?.toInt() ?? 0,
       currency: row['currency'] as String? ?? 'SEK',
       inStock: row['in_stock'] as bool? ?? false,
+      colour: colour,
+      colourLabel: colour == null ? null : row['colour_label'] as String?,
     );
   }
 }
@@ -331,6 +355,7 @@ class RepairPricerDevice {
     required this.modelName,
     this.deviceTypeName,
     this.externalUid,
+    this.colours = const [],
   });
 
   final String manufacturerName;
@@ -341,12 +366,18 @@ class RepairPricerDevice {
   /// carries it.
   final String? externalUid;
 
+  /// The colours this model is sold in, with the manufacturer's names. A
+  /// seed for a shop's own list, not a claim that no other colour exists.
+  /// Empty when unknown.
+  final List<ModelColour> colours;
+
   factory RepairPricerDevice.fromRow(Map<String, dynamic> row) {
     return RepairPricerDevice(
       manufacturerName: row['manufacturer_name'] as String? ?? '',
       modelName: row['model_name'] as String? ?? '',
       deviceTypeName: row['device_type_name'] as String?,
       externalUid: row['external_uid'] as String?,
+      colours: ModelColour.fromColumns(row['colours'], row['colour_labels']),
     );
   }
 }

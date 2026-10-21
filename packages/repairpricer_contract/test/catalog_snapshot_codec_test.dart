@@ -51,6 +51,38 @@ void main() {
     expect(slot['category_path'], contains('Reparation'));
   });
 
+  test('colours ride along additively, without a version bump', () {
+    final doc = encodeCatalogSnapshot(
+      generatedAt: generatedAt,
+      devices: [
+        {
+          'model_name': 'iPhone 13',
+          'colours': ['black', 'white'],
+          'colour_labels': ['Midnight', 'Starlight'],
+        },
+      ],
+      slots: [
+        {
+          'code': 'rp_2',
+          'offered_colours': ['black', 'blue'],
+        },
+      ],
+    );
+    expect(doc['version'], 1);
+    final data = decodeCatalogSnapshot(doc);
+    expect(ModelColour.fromColumns(
+            data.devices.single['colours'], data.devices.single['colour_labels']),
+        [
+          ModelColour(key: 'black', label: 'Midnight'),
+          ModelColour(key: 'white', label: 'Starlight'),
+        ]);
+    expect(parseColourKeys(data.slots.single['offered_colours']),
+        ['black', 'blue']);
+    // An edition written before the columns existed still decodes.
+    expect(parseColourKeys(decodeCatalogSnapshot(encode()).slots.single['offered_colours']),
+        isEmpty);
+  });
+
   test('decode rejects a newer version than this reader understands', () {
     final doc = encode()..['version'] = catalogSnapshotVersion + 1;
     expect(() => decodeCatalogSnapshot(doc), throwsFormatException);

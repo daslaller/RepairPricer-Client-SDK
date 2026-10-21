@@ -1,3 +1,5 @@
+import 'colour.dart';
+
 /// Product identity is independent of repair devices, repairs and tiers.
 /// Unknown classification is valid and must not hide a supplier listing.
 enum ProductKind {
@@ -48,6 +50,8 @@ class ProductCatalogEntry {
     this.availability = ProductAvailability.unknown,
     this.quantity,
     this.sourceGeneratedAt,
+    this.colour,
+    this.colourLabel,
   }) {
     for (final value in [
       productId,
@@ -66,6 +70,7 @@ class ProductCatalogEntry {
     if (quantity != null && quantity! < 0) {
       throw ArgumentError('Quantity cannot be negative');
     }
+    _validateColour(colour, colourLabel);
   }
 
   final String productId;
@@ -88,6 +93,15 @@ class ProductCatalogEntry {
   /// Non-secret identifier for the supplier account/price basis, not a token.
   final String priceContext;
 
+  /// A key from [colourKeys], or null when the supplier states no colour the
+  /// platform could read with certainty. Null is "unplaced", not
+  /// "colourless" — see `colour.dart`.
+  final String? colour;
+
+  /// The supplier's own word for [colour] ("Midnight", "Svart"). Only set
+  /// together with [colour].
+  final String? colourLabel;
+
   factory ProductCatalogEntry.fromJson(Map<String, dynamic> json) =>
       ProductCatalogEntry(
         productId: json['productId'] as String,
@@ -109,6 +123,10 @@ class ProductCatalogEntry {
             ? null
             : DateTime.parse(json['sourceGeneratedAt'] as String),
         priceContext: json['priceContext'] as String,
+        colour: parseColourKey(json['colour']),
+        colourLabel: parseColourKey(json['colour']) == null
+            ? null
+            : json['colourLabel'] as String?,
       );
 
   Map<String, Object?> toJson() => {
@@ -129,6 +147,10 @@ class ProductCatalogEntry {
         'observedAt': observedAt.toUtc().toIso8601String(),
         'sourceGeneratedAt': sourceGeneratedAt?.toUtc().toIso8601String(),
         'priceContext': priceContext,
+        // Omitted rather than null so a record without a colour serializes
+        // exactly as it did before the field existed.
+        if (colour != null) 'colour': colour,
+        if (colourLabel != null) 'colourLabel': colourLabel,
       };
 }
 
@@ -148,6 +170,8 @@ class ShopProduct {
     this.availability = ProductAvailability.unknown,
     this.maxQuantity = 1,
     List<String> images = const [],
+    this.colour,
+    this.colourLabel,
   }) : images = List.unmodifiable(images) {
     if (productId.trim().isEmpty || title.trim().isEmpty) {
       throw ArgumentError('Product ID and title are required');
@@ -166,6 +190,7 @@ class ShopProduct {
         throw ArgumentError('Product images must use HTTPS');
       }
     }
+    _validateColour(colour, colourLabel);
   }
 
   final String productId;
@@ -182,6 +207,11 @@ class ShopProduct {
   /// Shop's purchase limit; it is not a claim about supplier inventory quantity.
   final int maxQuantity;
   final List<String> images;
+
+  /// Same meaning as [ProductCatalogEntry.colour]: a known key or null.
+  final String? colour;
+  final String? colourLabel;
+
   bool get canAddToCart =>
       availability == ProductAvailability.inStock && maxQuantity > 0;
 
@@ -198,6 +228,10 @@ class ShopProduct {
         observedAt: DateTime.parse(json['observedAt'] as String),
         maxQuantity: json['maxQuantity'] as int? ?? 1,
         images: (json['images'] as List? ?? const []).cast<String>(),
+        colour: parseColourKey(json['colour']),
+        colourLabel: parseColourKey(json['colour']) == null
+            ? null
+            : json['colourLabel'] as String?,
       );
 
   Map<String, Object?> toJson() => {
@@ -213,7 +247,19 @@ class ShopProduct {
         'observedAt': observedAt.toUtc().toIso8601String(),
         'maxQuantity': maxQuantity,
         'images': images,
+        if (colour != null) 'colour': colour,
+        if (colourLabel != null) 'colourLabel': colourLabel,
       };
+}
+
+/// A colour must be a known key, and a label means nothing without one.
+/// Readers never get here with an unknown key: `fromJson` parses it to null
+/// first, so a newer platform's key cannot make an older reader throw.
+void _validateColour(String? colour, String? colourLabel) {
+  if (colour != null) validateColourKey(colour);
+  if (colourLabel != null && colour == null) {
+    throw ArgumentError('colourLabel requires a colour');
+  }
 }
 
 /// Integer minor units that round-trip exactly on Dart VM and JavaScript.
